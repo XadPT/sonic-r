@@ -35,6 +35,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <winioctl.h>
+#include <mmsystem.h>
 #include <direct.h>
 #define MKDIR(p) _mkdir(p)
 #define SEP '\\'
@@ -267,32 +268,155 @@ static int read_toc(HANDLE h, TOC_DATA *toc)
     return DeviceIoControl(h, IOCTL_READ_TOC, NULL, 0, toc, sizeof(*toc), &got, NULL) != 0;
 }
 
-static int count_audio(const TOC_DATA *t)
+/* One audio track: its CD track number and its sectors [start, end). */
+typedef struct { int number; long start, end; } AUDIO_TRACK;
+
+/* The full TOC (every session): needed when a disc has more than one session,
+ * as the plain TOC then only tells about the first one. */
+#define IOCTL_READ_TOC_EX 0x00024054   /* IOCTL_CDROM_READ_TOC_EX */
+#pragma pack(push, 1)
+typedef struct { UCHAR Format; UCHAR SessionTrack; UCHAR Reserved2, Reserved3; } TOC_EX_IN;
+typedef struct { UCHAR Session, Control_Adr, Tno, Point, MsfExtra[3], Zero, Msf[3]; } FULL_DESC;
+typedef struct { UCHAR Length[2]; UCHAR FirstSession, LastSession; FULL_DESC D[200]; } FULL_TOC;
+#pragma pack(pop)
+
+static int read_full_toc(HANDLE h, FULL_TOC *ft, int *count)
 {
+    TOC_EX_IN in;
+    DWORD got = 0;
+    memset(ft, 0, sizeof(*ft));
+    memset(&in, 0, sizeof(in));
+    in.Format = 2;   /* CDROM_READ_TOC_EX_FORMAT_FULL_TOC */
+    if (!DeviceIoControl(h, IOCTL_READ_TOC_EX, &in, sizeof(in), ft, sizeof(*ft), &got, NULL) || got < 4)
+        return 0;
+    int len = ((ft->Length[0] << 8) | ft->Length[1]) - 2;
+    *count = len > 0 ? len / (int)sizeof(FULL_DESC) : 0;
+    if (*count > 200) *count = 200;
+    return 1;
+}
+
+static long msf3_to_lba(const UCHAR *m) { return ((long)m[0] * 60 + m[1]) * 75 + m[2] - 150; }
+
+/* Audio tracks of the disc: from the plain TOC, or when that shows none, from
+ * the full TOC of every session. Returns the number of tracks found. */
+static int list_audio_tracks(HANDLE h, AUDIO_TRACK *out, int *fromFull)
+{
+    TOC_DATA toc;
     int n = 0;
-    for (int i = 0; i <= t->LastTrack - t->FirstTrack; i++)
-        if (!(t->Tracks[i].Control_Adr & 0x04)) n++;   /* Control (low nibble) bit 2 = data track */
+    *fromFull = 0;
+    if (read_toc(h, &toc)) {
+        int tracks = toc.LastTrack - toc.FirstTrack + 1;
+        for (int i = 0; i < tracks && n < 100; i++) {
+            if (toc.Tracks[i].Control_Adr & 0x04) continue;   /* data track */
+            long st = msf_to_lba(toc.Tracks[i].Address);
+            long en = msf_to_lba(toc.Tracks[i + 1].Address);   /* next track or lead-out */
+            if (en <= st) continue;
+            out[n].number = toc.Tracks[i].TrackNumber; out[n].start = st; out[n].end = en; n++;
+        }
+    }
+    if (n == 0) {
+        static FULL_TOC ft;
+        int cnt = 0;
+        if (read_full_toc(h, &ft, &cnt)) {
+            for (int i = 0; i < cnt && n < 100; i++) {
+                const FULL_DESC *d = &ft.D[i];
+                if (d->Point < 1 || d->Point > 99 || (d->Control_Adr & 0x04)) continue;
+                long st = msf3_to_lba(d->Msf), en = -1;
+                /* its end: the next track of the same session, else that session's lead-out (A2) */
+                for (int k = 0; k < cnt; k++) {
+                    const FULL_DESC *e = &ft.D[k];
+                    if (e->Session != d->Session) continue;
+                    long pos = msf3_to_lba(e->Msf);
+                    if (((e->Point >= 1 && e->Point <= 99 && e->Point != d->Point) || e->Point == 0xA2) &&
+                        pos > st && (en < 0 || pos < en)) en = pos;
+                }
+                if (en <= st) continue;
+                out[n].number = d->Point; out[n].start = st; out[n].end = en; n++;
+                *fromFull = 1;
+            }
+        }
+    }
     return n;
+}
+
+/* What the drive reports, in full: for when no audio is found. */
+static void cd_diag(HANDLE h, char letter)
+{
+    TOC_DATA toc;
+    static FULL_TOC ft;
+    int cnt = 0;
+    printf("\n--- Disc report for drive %c: (send a photo of this to the author) ---\n", letter);
+    if (read_toc(h, &toc)) {
+        printf("TOC: first track %d, last track %d\n", toc.FirstTrack, toc.LastTrack);
+        for (int i = 0; i <= toc.LastTrack - toc.FirstTrack + 1 && i < 100; i++)
+            printf("  entry %2d: number %3d, control/adr 0x%02X (%s), start %ld\n", i, toc.Tracks[i].TrackNumber,
+                   toc.Tracks[i].Control_Adr, (toc.Tracks[i].Control_Adr & 4) ? "data" : "audio",
+                   msf_to_lba(toc.Tracks[i].Address));
+    } else {
+        printf("TOC: cannot be read (error %lu)\n", (unsigned long)GetLastError());
+    }
+    if (read_full_toc(h, &ft, &cnt)) {
+        printf("Full TOC: sessions %d..%d, %d entries\n", ft.FirstSession, ft.LastSession, cnt);
+        for (int i = 0; i < cnt; i++)
+            printf("  session %d: point 0x%02X, control/adr 0x%02X, position %ld\n", ft.D[i].Session,
+                   ft.D[i].Point, ft.D[i].Control_Adr, msf3_to_lba(ft.D[i].Msf));
+    } else {
+        printf("Full TOC: not available (error %lu)\n", (unsigned long)GetLastError());
+    }
+    /* the way the 1998 game itself asks: Windows' MCI "cdaudio" */
+    {
+        char ret[128];
+        char cmd[96];
+        MCIERROR e;
+        snprintf(cmd, sizeof(cmd), "open %c: type cdaudio alias srdiag shareable", letter);
+        e = mciSendStringA(cmd, ret, sizeof(ret), NULL);
+        if (e) {
+            mciGetErrorStringA(e, ret, sizeof(ret));
+            printf("MCI cdaudio: cannot open (%s)\n", ret);
+        } else {
+            int n = 0;
+            ret[0] = 0;
+            mciSendStringA("status srdiag number of tracks", ret, sizeof(ret), NULL);
+            n = atoi(ret);
+            printf("MCI cdaudio: %d tracks\n", n);
+            for (int t = 1; t <= n && t <= 99; t++) {
+                char ty[64] = "?", ln[64] = "?";
+                snprintf(cmd, sizeof(cmd), "status srdiag type track %d", t);
+                mciSendStringA(cmd, ty, sizeof(ty), NULL);
+                snprintf(cmd, sizeof(cmd), "status srdiag length track %d", t);
+                mciSendStringA(cmd, ln, sizeof(ln), NULL);
+                printf("  track %2d: %s, length %s\n", t, ty, ln);
+            }
+            mciSendStringA("close srdiag", NULL, 0, NULL);
+        }
+    }
+    printf("--- end of report ---\n");
 }
 
 static int rip_cd(char letter, const char *outDir)
 {
     HANDLE h = open_drive(letter);
-    if (h == INVALID_HANDLE_VALUE) { printf("Cannot open drive %c:\n", letter); return 0; }
+    if (h == INVALID_HANDLE_VALUE) { printf("Cannot open drive %c: (error %lu). Try running as administrator.\n", letter, (unsigned long)GetLastError()); return 0; }
     TOC_DATA toc;
-    if (!read_toc(h, &toc)) { printf("Drive %c: has no readable disc.\n", letter); CloseHandle(h); return 0; }
-    int tracks = toc.LastTrack - toc.FirstTrack + 1;
-    printf("Drive %c: %d tracks, %d audio.\n", letter, tracks, count_audio(&toc));
+    if (!read_toc(h, &toc)) { printf("Drive %c: has no readable disc.\n", letter); cd_diag(h, letter); CloseHandle(h); return 0; }
+    AUDIO_TRACK list[100];
+    int fromFull = 0;
+    int nTracks = list_audio_tracks(h, list, &fromFull);
+    printf("Drive %c: %d tracks on the disc, %d audio%s.\n", letter, toc.LastTrack - toc.FirstTrack + 1, nTracks,
+           fromFull ? " (found in another session)" : "");
+    if (nTracks == 0) {
+        printf("\nThis disc has no audio tracks that Windows can see, so there is no music to read.\n"
+               "(The 1998 game plays its music from CD audio tracks only.)\n");
+        cd_diag(h, letter);
+        CloseHandle(h);
+        return 0;
+    }
     static BYTE buf[SECT_RAW * READ_SECTS];
     int done = 0;
-    for (int i = 0; i < tracks; i++) {
-        TOC_TRACK *t = &toc.Tracks[i];
-        if (t->Control_Adr & 0x04) continue;            /* data track */
-        long start = msf_to_lba(t->Address);
-        long end = msf_to_lba(toc.Tracks[i + 1].Address);   /* next track or lead-out */
-        if (end <= start) continue;
+    for (int i = 0; i < nTracks; i++) {
+        long start = list[i].start, end = list[i].end;
         char name[32], out[1024];
-        snprintf(name, sizeof(name), "track%d.son", t->TrackNumber);
+        snprintf(name, sizeof(name), "track%d.son", list[i].number);
         join(out, sizeof(out), outDir, name);
         FILE *o = fopen(out, "wb");
         if (!o) { printf("Cannot write %s\n", out); continue; }
@@ -316,14 +440,17 @@ static int rip_cd(char letter, const char *outDir)
             s += n;
             long pct = (s - start) * 100 / total;
             if (pct != lastPct) {
-                printf("\r  track %2d: %3ld%%", t->TrackNumber, pct);
+                printf("\r  track %2d: %3ld%%", list[i].number, pct);
                 fflush(stdout);
                 lastPct = pct;
             }
         }
         fclose(o);
-        printf("\r  track %2d -> %s (%ld:%02ld)%s\n", t->TrackNumber, out,
-               total / 75 / 60, (total / 75) % 60, errors ? "  [some read errors, filled with silence]" : "");
+        printf("\r  track %2d -> %s (%ld:%02ld)%s\n", list[i].number, out,
+               total / 75 / 60, (total / 75) % 60,
+               errors ? "  [some read errors, filled with silence]" : "");
+        if (errors == (total + READ_SECTS - 1) / READ_SECTS)
+            printf("  WARNING: this drive cannot read audio from the disc, the track is silent.\n");
         done++;
     }
     CloseHandle(h);
@@ -339,8 +466,9 @@ static char find_audio_cd(void)
         if (GetDriveTypeA(root) != DRIVE_CDROM) continue;
         HANDLE h = open_drive(c);
         if (h == INVALID_HANDLE_VALUE) continue;
-        TOC_DATA toc;
-        int ok = read_toc(h, &toc) && count_audio(&toc) > 0;
+        AUDIO_TRACK list[100];
+        int fromFull;
+        int ok = list_audio_tracks(h, list, &fromFull) > 0;
         CloseHandle(h);
         if (ok) return c;
     }
@@ -410,6 +538,17 @@ int main(int argc, char **argv)
         if (!letter) {
             printf("No CD with audio tracks found. Put the Sonic R disc in the drive,\n"
                    "or drag your ripped WAV files onto this program.\n");
+            {   /* what each CD drive reports, to see why */
+                DWORD dv = GetLogicalDrives();
+                for (char c = 'A'; c <= 'Z'; c++) {
+                    char root[4] = { c, ':', '\\', 0 };
+                    if (!(dv & (1u << (c - 'A'))) || GetDriveTypeA(root) != DRIVE_CDROM) continue;
+                    HANDLE hh = open_drive(c);
+                    if (hh == INVALID_HANDLE_VALUE) { printf("\nCannot open drive %c: (error %lu)\n", c, (unsigned long)GetLastError()); continue; }
+                    cd_diag(hh, c);
+                    CloseHandle(hh);
+                }
+            }
             finish(1);
         }
         if (!outDir[0]) {

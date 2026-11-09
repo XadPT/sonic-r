@@ -47,6 +47,17 @@ but never sold. See [LICENSE](LICENSE).
 - **SonicR-Music.exe**: a Windows tool that rips the music from your original CD
   (or converts WAV files) into the format the Xbox build reads.
 
+## Screenshots
+
+Captured on a real original Xbox (720p, 60 fps mode).
+
+| | |
+|---|---|
+| ![Title screen](docs/screenshots/title-screen.png) | ![Select mode](docs/screenshots/select-mode.png) |
+| ![Select character](docs/screenshots/select-character.png) | ![Online lobby](docs/screenshots/online-lobby.png) |
+| ![Race on Resort Island](docs/screenshots/race-1.png) | ![Race on Resort Island](docs/screenshots/race-2.png) |
+| ![Race on Resort Island](docs/screenshots/race-3.png) | ![Graphics options](docs/screenshots/graphics-options.png) |
+
 ## Download
 
 Get `SonicR-Xbox.zip` from the
@@ -74,11 +85,31 @@ Everything is explained step by step in **[docs/xbox.md](docs/xbox.md)**:
 install, music, controls, online play, video modes, saves, troubleshooting,
 building and technical notes.
 
+## How to build
+
+Full details are in [docs/xbox.md](docs/xbox.md#building-from-source).
+
+1. Install [nxdk](https://github.com/XboxDev/nxdk) and its prerequisites, and
+   clone [pbgl](https://github.com/Ryzee119/pbgl) into `nxdk/lib/pbgl`.
+2. Activate the toolchain and build:
+   ```sh
+   eval "$(nxdk/bin/activate -s)"
+   make -C source/xbox NXDK_DIR=$PWD/nxdk -j8
+   ```
+3. The result is `source/xbox/bin/default.xbe`, with the title ID already
+   stamped (needed so saves go to `E:\UDATA\FFFF5352`).
+4. Build the music tool for Windows (optional):
+   ```sh
+   i686-w64-mingw32-gcc -O2 -static -s -o SonicR-Music.exe source/xbox/tools/sonicr_music/sonicr_music.c
+   ```
+5. Copy your game data, `MUSIC` and `default.xbe` to the Xbox (see Quick start).
+
 ## In game
 
 - **Options > Controls** remaps the buttons. **Options > Graphics** sets
   resolution and draw distance.
 - **Reset to dashboard:** hold L + R triggers + Back + Black for half a second.
+- **Music:** `MUSIC\trackN.son` (raw PCM) or `MUSIC\trackN.adx` (about 3.5x smaller).
 - **Diagnostics:** off by default. Put an empty `DEBUG.TXT` next to
   `default.xbe` to enable `SONICR.LOG` and the debug pad shortcuts when
   reporting a problem.

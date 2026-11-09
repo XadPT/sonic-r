@@ -357,8 +357,10 @@ static HANDLE open_drive_rw(char letter)
                        OPEN_EXISTING, 0, NULL);
 }
 
-/* READ CD (0xBE), any sector type, sync+header+user data+EDC: the 2352 raw bytes. */
-static int read_raw_sector(HANDLE h, long lba, BYTE *out, UCHAR *sk)
+/* READ CD (0xBE) of one sector: `type` = expected sector type (0 any, 1 CD-DA,
+ * 2 mode 1, 3 mode 2), `flags` = what to return (0x10 user data, 0xF8 everything
+ * incl. sync/headers/EDC). `want` bytes come back in `out`. */
+static int read_cd(HANDLE h, long lba, int type, int flags, int want, BYTE *out, UCHAR *sense3)
 {
     SPTD q;
     DWORD got = 0;
@@ -367,29 +369,32 @@ static int read_raw_sector(HANDLE h, long lba, BYTE *out, UCHAR *sk)
     q.p.CdbLength = 12;
     q.p.SenseInfoLength = sizeof(q.sense);
     q.p.DataIn = SCSI_IOCTL_DATA_IN;
-    q.p.DataTransferLength = SECT_RAW;
+    q.p.DataTransferLength = want;
     q.p.TimeOutValue = 10;
     q.p.DataBuffer = out;
     q.p.SenseInfoOffset = offsetof(SPTD, sense);
     q.p.Cdb[0] = 0xBE;
-    q.p.Cdb[1] = 0x00;                 /* any sector type */
+    q.p.Cdb[1] = (UCHAR)(type << 2);
     q.p.Cdb[2] = (UCHAR)(lba >> 24); q.p.Cdb[3] = (UCHAR)(lba >> 16);
     q.p.Cdb[4] = (UCHAR)(lba >> 8);  q.p.Cdb[5] = (UCHAR)lba;
     q.p.Cdb[8] = 1;                    /* one sector */
-    q.p.Cdb[9] = 0xF8;                 /* sync, headers, user data, EDC/ECC */
+    q.p.Cdb[9] = (UCHAR)flags;
     if (!DeviceIoControl(h, IOCTL_SCSI_PASS_THROUGH_DIRECT, &q, sizeof(q), &q, sizeof(q), &got, NULL))
         return -(int)GetLastError();
-    if (q.p.ScsiStatus != 0) { if (sk) *sk = q.sense[2] & 0x0F; return -1000 - q.p.ScsiStatus; }
+    if (q.p.ScsiStatus != 0) {
+        if (sense3) { sense3[0] = q.sense[2] & 0x0F; sense3[1] = q.sense[12]; sense3[2] = q.sense[13]; }
+        return -1000 - q.p.ScsiStatus;
+    }
     return 1;
 }
 
 /* How much a sector looks like 16-bit stereo music: the average jump between
  * neighbouring samples against the average level (noise ~1.4, music well below 1). */
-static double pcm_smoothness(const BYTE *b)
+static double pcm_smoothness(const BYTE *b, int bytes)
 {
     const short *x = (const short *)b;
     double lev = 0, dif = 0;
-    for (int i = 2; i < 588 * 2; i += 2) {
+    for (int i = 2; i < bytes / 2; i += 2) {
         lev += abs(x[i]);
         dif += abs(x[i] - x[i - 2]);
     }
@@ -403,6 +408,7 @@ static void probe_hidden(char letter, long leadout)
     long volSectors = 0;
     HANDLE hv = open_drive(letter);
     HANDLE hr = open_drive_rw(letter);
+    HANDLE hv2 = open_drive(letter);
     printf("Raw sector probe:\n");
     if (hv != INVALID_HANDLE_VALUE) {
         DWORD got = 0;
@@ -420,20 +426,38 @@ static void probe_hidden(char letter, long leadout)
                (unsigned long)GetLastError());
         return;
     }
-    long lba[6];
-    int n = 0;
+    long lba[3];
     long from = volSectors > 0 ? volSectors + 200 : leadout / 4;
-    for (int i = 0; i < 6; i++) lba[n++] = from + (leadout - 300 - from) * i / 5;
-    for (int i = 0; i < n; i++) {
-        UCHAR sk = 0;
-        int r = read_raw_sector(hr, lba[i], sec, &sk);
-        if (r < 0) { printf("  sector %6ld: READ CD failed (%d, sense key %u)\n", lba[i], r, sk); continue; }
-        int sync = sec[0] == 0 && sec[11] == 0 && sec[1] == 0xFF && sec[10] == 0xFF;
-        double sm = pcm_smoothness(sec);
-        printf("  sector %6ld: sync=%s  first bytes %02X %02X %02X %02X %02X %02X %02X %02X  smoothness %.2f%s\n",
-               lba[i], sync ? "yes" : "no", sec[0], sec[1], sec[2], sec[3], sec[4], sec[5], sec[6], sec[7], sm,
-               sm < 0 ? " (silence)" : (sm < 0.6 ? "  <- looks like music" : ""));
+    lba[0] = from; lba[1] = from + (leadout - 300 - from) / 2; lba[2] = leadout - 300;
+    for (int i = 0; i < 3; i++) {
+        /* 1. the ordinary way: 2048 bytes of user data through the file system layer */
+        if (hv2 != INVALID_HANDLE_VALUE) {
+            DWORD got = 0;
+            LARGE_INTEGER pos; pos.QuadPart = (LONGLONG)lba[i] * 2048;
+            SetFilePointerEx(hv2, pos, NULL, FILE_BEGIN);
+            if (ReadFile(hv2, sec, 2048, &got, NULL) && got == 2048) {
+                double sm = pcm_smoothness(sec, 2048);
+                printf("  sector %6ld  ReadFile: ok  %02X %02X %02X %02X %02X %02X %02X %02X  smoothness %.2f%s\n",
+                       lba[i], sec[0], sec[1], sec[2], sec[3], sec[4], sec[5], sec[6], sec[7], sm,
+                       sm < 0 ? " (silence)" : (sm < 0.6 ? "  <- looks like music" : ""));
+            } else printf("  sector %6ld  ReadFile: failed (error %lu)\n", lba[i], (unsigned long)GetLastError());
+        }
+        /* 2. READ CD in several ways */
+        static const int tv[4][3] = { {0, 0x10, 2048}, {0, 0xF8, SECT_RAW}, {1, 0x10, SECT_RAW}, {2, 0x10, 2048} };
+        for (int k = 0; k < 4; k++) {
+            UCHAR sn[3] = {0, 0, 0};
+            int r = read_cd(hr, lba[i], tv[k][0], tv[k][1], tv[k][2], sec, sn);
+            if (r < 0) {
+                printf("    READ CD type %d flags %02X: failed (%d, sense %u/%02X/%02X)\n", tv[k][0], tv[k][1], r, sn[0], sn[1], sn[2]);
+            } else {
+                double sm = pcm_smoothness(sec, tv[k][2]);
+                printf("    READ CD type %d flags %02X: ok  %02X %02X %02X %02X %02X %02X %02X %02X  smoothness %.2f%s\n",
+                       tv[k][0], tv[k][1], sec[0], sec[1], sec[2], sec[3], sec[4], sec[5], sec[6], sec[7], sm,
+                       sm < 0 ? " (silence)" : (sm < 0.6 ? "  <- looks like music" : ""));
+            }
+        }
     }
+    if (hv2 != INVALID_HANDLE_VALUE) CloseHandle(hv2);
     CloseHandle(hr);
 }
 

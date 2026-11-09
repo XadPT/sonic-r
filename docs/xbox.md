@@ -52,8 +52,10 @@ For xemu or a disc image, put the same files in `source/xbox/bin/` next to
 The PC game plays its soundtrack straight from the CD as audio tracks, which are
 not files. The Xbox build plays `MUSIC\trackN.son` files: headerless 44.1 kHz,
 16-bit stereo PCM, the same layout as CD audio, where `N` is the CD track number.
-(`.adx` and `.adp` files with the same names also work.) Without music the game
-runs normally, just without the soundtrack.
+`.adx` files with the same names (`MUSIC\track2.adx` ...) also work and are about
+3.5 times smaller than the `.son` files, which helps on the Xbox hard drive
+(`.adp` works too). If both `trackN.son` and `trackN.adx` exist, the `.son` is
+used. Without music the game runs normally, just without the soundtrack.
 
 **`SonicR-Music.exe`** (Windows, in the release package; source in
 `source/xbox/tools/sonicr_music/`) makes these files:

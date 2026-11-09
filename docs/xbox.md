@@ -70,6 +70,10 @@ runs normally, just without the soundtrack.
   them to WAV with any audio tool first.
 - `-o DIR` chooses the output folder.
 
+- **From a disc image:** drag the `.cue` file of a `.bin/.cue` dump onto
+  `SonicR-Music.exe`. It extracts the audio tracks of the image. Nothing needs
+  to be uploaded anywhere, it runs on your PC.
+
 **If the tool says "0 audio" or finds no audio tracks:** some Sonic R discs (for
 example the 1999 Sega re-release, where the disc is a single data track with
 more data after the file system) do not expose the music as normal CD audio

@@ -32,6 +32,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <ctype.h>
+#include <strings.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -624,6 +625,111 @@ static void parent_dir(char *out, size_t n, const char *path)
     if (s) *s = 0; else snprintf(out, n, ".");
 }
 
+
+/* ---- .cue / .bin disc images ------------------------------------------------ */
+#ifdef _WIN32
+#define SEEK64(f, o) _fseeki64((f), (long long)(o), SEEK_SET)
+#else
+#define SEEK64(f, o) fseeko((f), (off_t)(o), SEEK_SET)
+#endif
+
+typedef struct { int num; int audio; int secsz; char file[1024]; long long start; long long end; } CUE_TRACK;
+
+static int msf_text(const char *p, long *out)
+{
+    int m, s, f;
+    if (sscanf(p, "%d:%d:%d", &m, &s, &f) != 3) return 0;
+    *out = (m * 60 + s) * 75 + f;
+    return 1;
+}
+
+static int rip_cue(const char *cue, const char *outDir)
+{
+    FILE *fc = fopen(cue, "r");
+    if (!fc) { printf("Cannot open %s\n", cue); return 0; }
+    static CUE_TRACK tr[100];
+    int n = 0;
+    char line[2048], curFile[1024] = "", dir[1024];
+    parent_dir(dir, sizeof(dir), cue);
+    while (fgets(line, sizeof(line), fc)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (!strncasecmp(p, "FILE", 4)) {
+            char *a = strchr(p, '"'), *b = a ? strrchr(p, '"') : NULL;
+            if (a && b > a) { *b = 0; snprintf(curFile, sizeof(curFile), "%s", a + 1); }
+        } else if (!strncasecmp(p, "TRACK", 5) && n < 99) {
+            int num = 0; char mode[32] = "";
+            sscanf(p + 5, "%d %31s", &num, mode);
+            CUE_TRACK *t = &tr[n++];
+            memset(t, 0, sizeof(*t));
+            t->num = num;
+            t->audio = !strncasecmp(mode, "AUDIO", 5);
+            t->secsz = 2352;
+            if (!strncasecmp(mode, "MODE1/2048", 10)) t->secsz = 2048;
+            snprintf(t->file, sizeof(t->file), "%s", curFile);
+            t->start = -1;
+        } else if (!strncasecmp(p, "INDEX", 5) && n > 0) {
+            int idx = 0; char tm[32] = ""; long lba;
+            sscanf(p + 5, "%d %31s", &idx, tm);
+            if (idx == 1 && msf_text(tm, &lba)) tr[n - 1].start = (long long)lba * tr[n - 1].secsz;
+        }
+    }
+    fclose(fc);
+    int nAudio = 0;
+    for (int i = 0; i < n; i++) {
+        if (tr[i].audio) nAudio++;
+        /* end = start of the next track in the same file, else the end of the file */
+        char path[2048];
+        join(path, sizeof(path), dir, tr[i].file);
+        FILE *f = fopen(path, "rb");
+        long long size = 0;
+        if (f) { fseek(f, 0, SEEK_END); size = ftell(f); fclose(f); }
+        tr[i].end = size;
+        if (i + 1 < n && !strcmp(tr[i + 1].file, tr[i].file) && tr[i + 1].start >= 0) tr[i].end = tr[i + 1].start;
+    }
+    printf("Disc image: %d track(s), %d audio.\n", n, nAudio);
+    for (int i = 0; i < n; i++)
+        printf("  track %2d  %s  %s  %lld MB\n", tr[i].num, tr[i].audio ? "audio" : "data ", tr[i].file,
+               (tr[i].end - tr[i].start) / (1024 * 1024));
+    if (!nAudio) {
+        printf("\nThis image has no audio tracks, so there is no music in it that this tool can\n"
+               "extract. Use WAV files of the soundtrack instead (track2.wav ... track21.wav).\n");
+        return 0;
+    }
+    int done = 0;
+    for (int i = 0; i < n; i++) {
+        if (!tr[i].audio || tr[i].start < 0) continue;
+        char path[2048], outp[2048], nm[32];
+        join(path, sizeof(path), dir, tr[i].file);
+        snprintf(nm, sizeof(nm), "track%d.son", tr[i].num);
+        join(outp, sizeof(outp), outDir, nm);
+        FILE *f = fopen(path, "rb"), *o = fopen(outp, "wb");
+        if (!f || !o) { printf("  %s: cannot open files\n", nm); if (f) fclose(f); if (o) fclose(o); continue; }
+        long long pos = tr[i].start, len = tr[i].end - tr[i].start;
+        len -= len % 2352;
+        SEEK64(f, pos);
+        static unsigned char buf[2352 * 64];
+        long long left = len;
+        while (left > 0) {
+            size_t want = left > (long long)sizeof(buf) ? sizeof(buf) : (size_t)left;
+            size_t got = fread(buf, 1, want, f);
+            if (!got) break;
+            fwrite(buf, 1, got, o);
+            left -= (long long)got;
+        }
+        fclose(f); fclose(o);
+        printf("  %s: %lld MB\n", nm, (len - left) / (1024 * 1024));
+        done++;
+    }
+    return done;
+}
+
+static int has_ext(const char *s, const char *e)
+{
+    size_t a = strlen(s), b = strlen(e);
+    return a >= b && !strcasecmp(s + a - b, e);
+}
+
 int main(int argc, char **argv)
 {
     char outDir[1024] = "";
@@ -640,6 +746,7 @@ int main(int argc, char **argv)
                    "sonicr_music E:           rip from drive E:\n"
                    "sonicr_music a.wav b.wav  convert WAV files (track number from the name)\n"
                    "sonicr_music folder       convert every .wav in the folder\n"
+                   "sonicr_music disc.cue     extract the audio tracks of a .bin/.cue image\n"
                    "  -o DIR                  output folder (default: MUSIC)\n");
             return 0;
         }
@@ -698,7 +805,15 @@ int main(int argc, char **argv)
         MKDIR(outDir);
         printf("Converting to %s\n", outDir);
         for (int i = 0; i < nIn; i++) {
-            if (is_dir(inputs[i])) done += convert_folder(inputs[i], outDir);
+            if (has_ext(inputs[i], ".cue")) done += rip_cue(inputs[i], outDir);
+            else if (has_ext(inputs[i], ".bin")) {
+                char c[1024]; snprintf(c, sizeof(c), "%s", inputs[i]);
+                strcpy(c + strlen(c) - 3, "cue");
+                FILE *t = fopen(c, "r");
+                if (t) { fclose(t); done += rip_cue(c, outDir); }
+                else printf("  %s: give the .cue file of this image instead\n", inputs[i]);
+            }
+            else if (is_dir(inputs[i])) done += convert_folder(inputs[i], outDir);
             else if (has_wav_ext(inputs[i])) done += convert_wav(inputs[i], outDir);
             else printf("  %s: not a WAV file - skipped (convert it to WAV first)\n", inputs[i]);
         }

@@ -70,6 +70,15 @@ runs normally, just without the soundtrack.
   them to WAV with any audio tool first.
 - `-o DIR` chooses the output folder.
 
+**If the tool says "0 audio" or finds no audio tracks:** some Sonic R discs (for
+example the 1999 Sega re-release, where the disc is a single data track with
+more data after the file system) do not expose the music as normal CD audio
+tracks, so no PC program can rip it. Run `SonicR-Music.exe E:` as administrator
+and it prints a diagnostic report of the disc. In that case use the second
+option: get the soundtrack as WAV files named after the track number
+(`track2.wav` ... `track21.wav`) from another source you own, and drop them onto
+the tool. The game runs fine without music.
+
 Copy the resulting `MUSIC` folder next to `default.xbe`. On Linux or macOS the
 same source builds with `cc -O2 -o sonicr_music sonicr_music.c` and converts WAV
 files (rip the CD with any ripper first).

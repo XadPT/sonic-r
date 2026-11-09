@@ -30,12 +30,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <ctype.h>
 
 #ifdef _WIN32
 #include <windows.h>
 #include <winioctl.h>
 #include <mmsystem.h>
+#include <ntddscsi.h>
 #include <direct.h>
 #define MKDIR(p) _mkdir(p)
 #define SEP '\\'
@@ -339,6 +341,102 @@ static int list_audio_tracks(HANDLE h, AUDIO_TRACK *out, int *fromFull)
     return n;
 }
 
+
+/* ---- raw sector probe -------------------------------------------------
+ * A copy of a mixed-mode disc can have everything, audio too, inside ONE data
+ * track: the file system then only covers the first part (here ~105 MB of a
+ * ~590 MB track) and the rest is the audio, stored as raw sectors. READ CD
+ * returns a sector's 2352 bytes as stored, whatever the track type says. */
+typedef struct { SCSI_PASS_THROUGH_DIRECT p; UCHAR sense[32]; } SPTD;
+
+static HANDLE open_drive_rw(char letter)
+{
+    char path[16];
+    snprintf(path, sizeof(path), "\\\\.\\%c:", letter);
+    return CreateFileA(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                       OPEN_EXISTING, 0, NULL);
+}
+
+/* READ CD (0xBE), any sector type, sync+header+user data+EDC: the 2352 raw bytes. */
+static int read_raw_sector(HANDLE h, long lba, BYTE *out, UCHAR *sk)
+{
+    SPTD q;
+    DWORD got = 0;
+    memset(&q, 0, sizeof(q));
+    q.p.Length = sizeof(q.p);
+    q.p.CdbLength = 12;
+    q.p.SenseInfoLength = sizeof(q.sense);
+    q.p.DataIn = SCSI_IOCTL_DATA_IN;
+    q.p.DataTransferLength = SECT_RAW;
+    q.p.TimeOutValue = 10;
+    q.p.DataBuffer = out;
+    q.p.SenseInfoOffset = offsetof(SPTD, sense);
+    q.p.Cdb[0] = 0xBE;
+    q.p.Cdb[1] = 0x00;                 /* any sector type */
+    q.p.Cdb[2] = (UCHAR)(lba >> 24); q.p.Cdb[3] = (UCHAR)(lba >> 16);
+    q.p.Cdb[4] = (UCHAR)(lba >> 8);  q.p.Cdb[5] = (UCHAR)lba;
+    q.p.Cdb[8] = 1;                    /* one sector */
+    q.p.Cdb[9] = 0xF8;                 /* sync, headers, user data, EDC/ECC */
+    if (!DeviceIoControl(h, IOCTL_SCSI_PASS_THROUGH_DIRECT, &q, sizeof(q), &q, sizeof(q), &got, NULL))
+        return -(int)GetLastError();
+    if (q.p.ScsiStatus != 0) { if (sk) *sk = q.sense[2] & 0x0F; return -1000 - q.p.ScsiStatus; }
+    return 1;
+}
+
+/* How much a sector looks like 16-bit stereo music: the average jump between
+ * neighbouring samples against the average level (noise ~1.4, music well below 1). */
+static double pcm_smoothness(const BYTE *b)
+{
+    const short *x = (const short *)b;
+    double lev = 0, dif = 0;
+    for (int i = 2; i < 588 * 2; i += 2) {
+        lev += abs(x[i]);
+        dif += abs(x[i] - x[i - 2]);
+    }
+    return lev > 1000 ? dif / lev : -1.0;   /* -1: (near) silence */
+}
+
+static void probe_hidden(char letter, long leadout)
+{
+    static BYTE sec[SECT_RAW];
+    BYTE pvd[2048];
+    long volSectors = 0;
+    HANDLE hv = open_drive(letter);
+    HANDLE hr = open_drive_rw(letter);
+    printf("Raw sector probe:\n");
+    if (hv != INVALID_HANDLE_VALUE) {
+        DWORD got = 0;
+        LARGE_INTEGER pos; pos.QuadPart = 16 * 2048;
+        SetFilePointerEx(hv, pos, NULL, FILE_BEGIN);
+        if (ReadFile(hv, pvd, 2048, &got, NULL) && got == 2048 && pvd[0] == 1 && !memcmp(pvd + 1, "CD001", 5)) {
+            volSectors = (long)(pvd[80] | (pvd[81] << 8) | (pvd[82] << 16) | ((long)pvd[83] << 24));
+            printf("  file system: %ld sectors (%ld MB); disc track: %ld sectors (%ld MB)\n",
+                   volSectors, volSectors / 512, leadout, leadout / 512);
+        } else printf("  file system: cannot read the volume descriptor\n");
+        CloseHandle(hv);
+    }
+    if (hr == INVALID_HANDLE_VALUE) {
+        printf("  raw reads need administrator rights (error %lu): run the program as administrator\n",
+               (unsigned long)GetLastError());
+        return;
+    }
+    long lba[6];
+    int n = 0;
+    long from = volSectors > 0 ? volSectors + 200 : leadout / 4;
+    for (int i = 0; i < 6; i++) lba[n++] = from + (leadout - 300 - from) * i / 5;
+    for (int i = 0; i < n; i++) {
+        UCHAR sk = 0;
+        int r = read_raw_sector(hr, lba[i], sec, &sk);
+        if (r < 0) { printf("  sector %6ld: READ CD failed (%d, sense key %u)\n", lba[i], r, sk); continue; }
+        int sync = sec[0] == 0 && sec[11] == 0 && sec[1] == 0xFF && sec[10] == 0xFF;
+        double sm = pcm_smoothness(sec);
+        printf("  sector %6ld: sync=%s  first bytes %02X %02X %02X %02X %02X %02X %02X %02X  smoothness %.2f%s\n",
+               lba[i], sync ? "yes" : "no", sec[0], sec[1], sec[2], sec[3], sec[4], sec[5], sec[6], sec[7], sm,
+               sm < 0 ? " (silence)" : (sm < 0.6 ? "  <- looks like music" : ""));
+    }
+    CloseHandle(hr);
+}
+
 /* What the drive reports, in full: for when no audio is found. */
 static void cd_diag(HANDLE h, char letter)
 {
@@ -355,6 +453,8 @@ static void cd_diag(HANDLE h, char letter)
     } else {
         printf("TOC: cannot be read (error %lu)\n", (unsigned long)GetLastError());
     }
+    if (read_toc(h, &toc) && toc.LastTrack == toc.FirstTrack && (toc.Tracks[0].Control_Adr & 4))
+        probe_hidden(letter, msf_to_lba(toc.Tracks[1].Address));
     if (read_full_toc(h, &ft, &cnt)) {
         printf("Full TOC: sessions %d..%d, %d entries\n", ft.FirstSession, ft.LastSession, cnt);
         for (int i = 0; i < cnt; i++)

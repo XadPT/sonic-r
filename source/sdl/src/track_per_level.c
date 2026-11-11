@@ -162,7 +162,7 @@ void LoadLightingTable(const char *filename, int start, int count)
     int entryCount = count << 5;   /* [+0x28] << 5 */
     int *dst = g_charLightingTable + tableIdx * 0x60;  /* stride 0x180 bytes = 0x60 ints */
 
-#ifdef SONICR_DC
+#if defined(SONICR_DC) || defined(SONICR_XBOX)
     unsigned char *raw = (unsigned char *)malloc((size_t)entryCount * 3);
     if (raw != NULL) {
         size_t got = fRead(raw, 1, (size_t)entryCount * 3, fp);
@@ -187,7 +187,7 @@ void LoadLightingTable(const char *filename, int start, int count)
         dst[2] = ((int)b << 13) + 0x1000;
         dst += 3;
     }
-#ifdef SONICR_DC
+#if defined(SONICR_DC) || defined(SONICR_XBOX)
     }
 #endif
 done:

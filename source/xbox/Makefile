@@ -30,6 +30,7 @@ SRCS := $(shell find $(SDL_SRC) -name '*.c' ! \( $(EXCLUDE) \)) \
         $(XBOX_DIR)/src/xbox_mixer.c \
         $(XBOX_DIR)/src/xbox_net.c \
         $(XBOX_DIR)/src/xbox_entry.c \
+        $(XBOX_DIR)/src/xbox_fcache.c \
         $(XBOX_DIR)/src/xbox_fastdraw.c \
         $(XBOX_DIR)/src/xbox_fastmem.c \
         $(XBOX_DIR)/src/xbox_kbd.c

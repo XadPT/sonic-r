@@ -296,7 +296,6 @@ static FILE *xb_fopen_raw(const char *path, const char *mode, char *relOut, size
 extern int g_xbDebug;
 extern volatile const char *g_lastMark;
 extern volatile int g_xbFrames;
-static char s_fileMark[160] = "file io";
 
 void xb_diag_begin(xb_diag *d, const char *mark)
 {
@@ -318,37 +317,21 @@ void xb_diag_end(xb_diag *d)
 
 FILE *xb_fopen(const char *path, const char *mode)
 {
-    xb_diag d;
     char rel[200];
     rel[0] = 0;
-    if (!g_xbDebug) return xb_fopen_raw(path, mode, NULL, 0);
-    static char s_openMark[200];
-    snprintf(s_openMark, sizeof(s_openMark), "fopen %s", path ? path : "?");
-    xb_diag_begin(&d, s_openMark);
-    FILE *f = xb_fopen_raw(path, mode, rel, sizeof(rel));
-    xb_diag_end(&d);
-    snprintf(s_fileMark, sizeof(s_fileMark), "fread/fclose %s", rel);
+    FILE *f;
+    if (!g_xbDebug) {
+        f = xb_fopen_raw(path, mode, rel, sizeof(rel));
+    } else {
+        xb_diag d;
+        static char s_openMark[200];
+        snprintf(s_openMark, sizeof(s_openMark), "fopen %s", path ? path : "?");
+        xb_diag_begin(&d, s_openMark);
+        f = xb_fopen_raw(path, mode, rel, sizeof(rel));
+        xb_diag_end(&d);
+    }
+    if (f) xb_fcache_attach(f, mode, rel);   /* read-ahead for plain reads (xbox_fcache.c) */
     return f;
-}
-
-size_t xb_fread(void *buf, size_t size, size_t count, FILE *f)
-{
-    if (!g_xbDebug) return fread(buf, size, count, f);
-    xb_diag d;
-    xb_diag_begin(&d, s_fileMark);
-    size_t r = fread(buf, size, count, f);
-    xb_diag_end(&d);
-    return r;
-}
-
-int xb_fclose(FILE *f)
-{
-    if (!g_xbDebug) return fclose(f);
-    xb_diag d;
-    xb_diag_begin(&d, s_fileMark);
-    int r = fclose(f);
-    xb_diag_end(&d);
-    return r;
 }
 
 /* Last-chance logger for CPU exceptions (divide by zero, bad pointers, ...).

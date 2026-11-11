@@ -1083,8 +1083,8 @@ void platform_gl_swap(void)
         g_xbFrames = s_frames;
         {
             /* IGR (in-game reset), the homebrew convention: hold L + R triggers
-             * + Back + Black on any pad for half a second -> back to the
-             * dashboard, same path as Options > Exit to Dashboard. */
+             * + Back + Black on any pad -> back to the dashboard at once
+             * (the four-button chord is hard to hit by accident), same path as Options > Exit to Dashboard. */
             static int s_igrHeld;
             int combo = 0;
             for (int i = 0; i < s_padCount && i < MAX_GAMEPADS; i++) {
@@ -1099,7 +1099,7 @@ void platform_gl_swap(void)
                 }
             }
             s_igrHeld = combo ? s_igrHeld + 1 : 0;
-            if (s_igrHeld >= 15) {
+            if (s_igrHeld >= 1) {
                 xb_log_flush();   /* write out the buffered diagnostics first */
                 fprintf(stderr, "IGR: reset requested\n");
                 fflush(stderr);

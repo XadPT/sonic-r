@@ -32,13 +32,17 @@ int    sr_fError(FILE *file);
  * relative paths and converts '/' (see source/xbox/src/xbox_entry.c). */
 FILE *xb_fopen(const char *path, const char *mode);
 #define fOpen(path, mode)                               xb_fopen(path, mode)
+size_t xb_fread(void *buf, size_t size, size_t count, FILE *f);
+int    xb_fclose(FILE *f);
+#define fRead(buffer, elementSize, elementCount, file)  xb_fread(buffer, elementSize, elementCount, file)
+#define fClose(file)                                    xb_fclose(file)
 #else
 #define fOpen(path, mode)                               fopen(path, mode)
-#endif
 #define fRead(buffer, elementSize, elementCount, file)  fread(buffer, elementSize, elementCount, file)
+#define fClose(file)                                    fclose(file)
+#endif
 #define fSeek(file, offset, whence)                     fseek(file, offset, whence)
 #define fTell(file)                                     ftell(file)
-#define fClose(file)                                    fclose(file)
 #define fWrite(buffer, elementSize, elementCount, file) fwrite(buffer, elementSize, elementCount, file)
 #define fError(file)                                    ferror(file)
 #endif

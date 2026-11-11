@@ -40,6 +40,7 @@ void xbox_log_mem(const char *where)
 #include <ctype.h>
 #include <nxdk/mount.h>
 #include "xbox_udata_assets.h"
+#include "xbox_diag.h"
 
 #define UD_SAVES    "000000000001"   /* SAVE\R01..R08.SAV */
 #define UD_SETTINGS "000000000002"   /* SONICR.INF, JOYSTICK.INF */
@@ -247,7 +248,7 @@ static FILE *xb_open_net00(const char *orig)
     return fopen(out, "rb");
 }
 
-FILE *xb_fopen(const char *path, const char *mode)
+static FILE *xb_fopen_raw(const char *path, const char *mode, char *relOut, size_t relSize)
 {
     char rel[400], buf[560];
     size_t n = 0;
@@ -260,6 +261,7 @@ FILE *xb_fopen(const char *path, const char *mode)
     for (; *path && n < sizeof(rel) - 1; path++)
         rel[n++] = (*path == '/') ? '\\' : *path;
     rel[n] = 0;
+    if (relOut) snprintf(relOut, relSize, "%s", rel);
 
     if (!strchr(rel, ':')) {
         const char *folder = NULL;
@@ -284,6 +286,69 @@ FILE *xb_fopen(const char *path, const char *mode)
         if (sl) { *sl = 0; xb_mkdirs(buf); *sl = '\\'; }
     }
     return fopen(buf, mode);
+}
+
+
+/* ---- Diagnostics (only with D:\DEBUG.TXT) -------------------------------
+ * Slow file and audio calls on the main thread are logged ("SLOW ...") and
+ * the name of the call in progress becomes the watchdog's "last mark", so a
+ * stall shows what the game was waiting for. */
+extern int g_xbDebug;
+extern volatile const char *g_lastMark;
+extern volatile int g_xbFrames;
+static char s_fileMark[160] = "file io";
+
+void xb_diag_begin(xb_diag *d, const char *mark)
+{
+    if (!g_xbDebug) return;
+    d->t0 = SDL_GetTicks();
+    d->prev = g_lastMark;
+    g_lastMark = mark;
+}
+
+void xb_diag_end(xb_diag *d)
+{
+    if (!g_xbDebug) return;
+    unsigned dt = SDL_GetTicks() - d->t0;
+    const char *mark = (const char *)g_lastMark;
+    if (dt >= 250)
+        fprintf(stderr, "SLOW %s: %u ms (frame %d)\n", mark ? mark : "?", dt, (int)g_xbFrames);
+    g_lastMark = d->prev;
+}
+
+FILE *xb_fopen(const char *path, const char *mode)
+{
+    xb_diag d;
+    char rel[200];
+    rel[0] = 0;
+    if (!g_xbDebug) return xb_fopen_raw(path, mode, NULL, 0);
+    static char s_openMark[200];
+    snprintf(s_openMark, sizeof(s_openMark), "fopen %s", path ? path : "?");
+    xb_diag_begin(&d, s_openMark);
+    FILE *f = xb_fopen_raw(path, mode, rel, sizeof(rel));
+    xb_diag_end(&d);
+    snprintf(s_fileMark, sizeof(s_fileMark), "fread/fclose %s", rel);
+    return f;
+}
+
+size_t xb_fread(void *buf, size_t size, size_t count, FILE *f)
+{
+    if (!g_xbDebug) return fread(buf, size, count, f);
+    xb_diag d;
+    xb_diag_begin(&d, s_fileMark);
+    size_t r = fread(buf, size, count, f);
+    xb_diag_end(&d);
+    return r;
+}
+
+int xb_fclose(FILE *f)
+{
+    if (!g_xbDebug) return fclose(f);
+    xb_diag d;
+    xb_diag_begin(&d, s_fileMark);
+    int r = fclose(f);
+    xb_diag_end(&d);
+    return r;
 }
 
 /* Last-chance logger for CPU exceptions (divide by zero, bad pointers, ...).

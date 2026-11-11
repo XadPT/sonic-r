@@ -10,6 +10,7 @@
  * sfx_sdl.c / music_sdl.c rely on.
  */
 #include "SDL_mixer.h"
+#include "xbox_diag.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -556,7 +557,10 @@ Mix_Music *Mix_LoadMUS_RW(SDL_RWops *src, int freesrc)
 
 Mix_Music *Mix_LoadMUS(const char *file)
 {
+    xb_diag d;
+    xb_diag_begin(&d, "Mix_LoadMUS (open music file)");
     SDL_RWops *rw = SDL_RWFromFile(file, "rb");
+    xb_diag_end(&d);
     if (!rw) {
         set_err(SDL_GetError());
         return NULL;
@@ -569,6 +573,8 @@ void Mix_FreeMusic(Mix_Music *music)
     if (!music) {
         return;
     }
+    xb_diag d;
+    xb_diag_begin(&d, "Mix_FreeMusic (locks)");
     SDL_LockMutex(s_musMutex);
     SDL_LockAudioDevice(s_dev);
     if (s_music == music) {
@@ -579,9 +585,12 @@ void Mix_FreeMusic(Mix_Music *music)
     }
     SDL_UnlockAudioDevice(s_dev);
     SDL_UnlockMutex(s_musMutex);
+    xb_diag_end(&d);
+    xb_diag_begin(&d, "Mix_FreeMusic (close file)");
     if (music->ownsRw) {
         SDL_RWclose(music->rw);
     }
+    xb_diag_end(&d);
     free(music);
 }
 
@@ -590,6 +599,8 @@ int Mix_PlayMusic(Mix_Music *music, int loops)
     if (!music) {
         return -1;
     }
+    xb_diag d;
+    xb_diag_begin(&d, "Mix_PlayMusic (locks + seek)");
     SDL_LockMutex(s_musMutex);
     SDL_LockAudioDevice(s_dev);
     s_music = music;
@@ -600,11 +611,14 @@ int Mix_PlayMusic(Mix_Music *music, int loops)
     s_musicPlaying = 1;
     SDL_UnlockAudioDevice(s_dev);
     SDL_UnlockMutex(s_musMutex);
+    xb_diag_end(&d);
     return 0;
 }
 
 int Mix_HaltMusic(void)
 {
+    xb_diag d;
+    xb_diag_begin(&d, "Mix_HaltMusic (locks)");
     SDL_LockMutex(s_musMutex);
     SDL_LockAudioDevice(s_dev);
     s_musicPlaying = 0;
@@ -612,6 +626,7 @@ int Mix_HaltMusic(void)
     s_rEof = 0;
     SDL_UnlockAudioDevice(s_dev);
     SDL_UnlockMutex(s_musMutex);
+    xb_diag_end(&d);
     return 0;
 }
 

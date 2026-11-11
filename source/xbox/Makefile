@@ -63,6 +63,12 @@ $(BEARSSL_OBJS): CFLAGS += -DBR_AES_X86NI=0 -DBR_SSE2=0 -DBR_RDRAND=0 -DBR_POWER
 # Must not let the compiler turn anything in here back into memcpy/memset calls.
 $(XBOX_DIR)/src/xbox_fastmem.obj: CFLAGS += -fno-builtin
 
+# xbox_entry.c prints __DATE__/__TIME__ in the log: always recompile it so the
+# stamp is the real build time (make only rebuilds changed files otherwise).
+.PHONY: FORCE
+FORCE:
+$(XBOX_DIR)/src/xbox_entry.obj: FORCE
+
 # The game's main() is called from src/xbox_entry.c with a fixed argv, because
 # nxdk does not pass command-line arguments.
 $(SDL_SRC)/main.obj: CFLAGS += -Dmain=sonicr_main

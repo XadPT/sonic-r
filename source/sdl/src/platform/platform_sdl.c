@@ -1072,6 +1072,64 @@ void xb_note(const char *what)
 }
 #endif
 
+
+#ifdef SONICR_XBOX
+/* pbgl_swap_buffers() waits with no time limit in three places: for the GPU to
+ * go idle (pb_busy), for a free slot in pbkit's triple-buffer table
+ * (pb_finished) and for the next VBlank (pb_wait_for_vbl, an infinite
+ * NtWaitForSingleObject). pbkit drives that table from interrupts; if one is
+ * lost the main thread spins or sleeps for ever - the picture freezes, the
+ * music thread keeps playing and not even the IGR combo is reached. Same swap
+ * here, but every wait gives up after a while: the frame is dropped (and
+ * logged) and the game goes on, so the table can recover and the IGR works. */
+static int xb_wait_vbl_bounded(unsigned ms)
+{
+    unsigned start = (unsigned)pb_get_vbl_counter();
+    unsigned t0 = (unsigned)SDL_GetTicks();
+    while ((unsigned)pb_get_vbl_counter() == start) {
+        if ((unsigned)SDL_GetTicks() - t0 > ms)
+            return 0;
+        SDL_Delay(1);
+    }
+    return 1;
+}
+
+static int s_swapFails;
+static void xb_swap_gave_up(const char *what)
+{
+    s_swapFails++;
+    if (s_swapFails <= 10)
+        fprintf(stderr, "swap: gave up waiting for %s (#%d, frame %d) - frame dropped\n",
+                what, s_swapFails, g_xbFrames);
+}
+
+static void xb_swap_buffers(void)
+{
+    static unsigned s_lastSwap;
+    unsigned t0 = (unsigned)SDL_GetTicks();
+    int ok = 1;
+    while (pb_busy()) {
+        if ((unsigned)SDL_GetTicks() - t0 > 2000) { xb_swap_gave_up("the GPU to go idle"); ok = 0; break; }
+    }
+    if (ok) {
+        while (pb_finished()) {   /* 1 = buffer table full, try again */
+            if ((unsigned)SDL_GetTicks() - t0 > 2000) { xb_swap_gave_up("a free flip slot"); ok = 0; break; }
+            SDL_Delay(1);
+        }
+    }
+    if (ok) {
+        unsigned now = (unsigned)pb_get_vbl_counter();
+        while ((now - s_lastSwap) < 1u) {   /* swap interval 1: at most one frame per VBlank */
+            if (!xb_wait_vbl_bounded(100)) { xb_swap_gave_up("a VBlank"); break; }
+            now = (unsigned)pb_get_vbl_counter();
+        }
+        s_lastSwap = now;
+    }
+    pb_reset();
+    pb_target_back_buffer();
+}
+#endif /* SONICR_XBOX */
+
 void platform_gl_swap(void)
 {
 #ifdef SONICR_XBOX
@@ -1315,7 +1373,7 @@ void platform_gl_swap(void)
              * the new back buffer, make sure it is not the one being shown. */
             unsigned prevBack = (unsigned)(uintptr_t)pb_back_buffer() & 0x03FFFFFFu;
             s_fwArmed = 0;
-            pbgl_swap_buffers();
+            xb_swap_buffers();
             {
                 static int s_fixLog;
                 unsigned back = (unsigned)(uintptr_t)pb_back_buffer() & 0x03FFFFFFu;
@@ -1323,7 +1381,7 @@ void platform_gl_swap(void)
                     /* Not caught early (short frame): wait for the pending flip. */
                     int n = 0, forced = 0;
                     while ((XB_PCRTC_START & 0x03FFFFFFu) == back && n < 3) {
-                        pb_wait_for_vbl();
+                        if (!xb_wait_vbl_bounded(100)) { xb_swap_gave_up("the pending flip"); break; }
                         n++;
                     }
                     if ((XB_PCRTC_START & 0x03FFFFFFu) == back) {

@@ -1109,7 +1109,12 @@ static void xb_swap_buffers(void)
     unsigned t0 = (unsigned)SDL_GetTicks();
     int ok = 1;
     while (pb_busy()) {
-        if ((unsigned)SDL_GetTicks() - t0 > 2000) { xb_swap_gave_up("the GPU to go idle"); ok = 0; break; }
+        if ((unsigned)SDL_GetTicks() - t0 > 2000) {
+            /* GPU still running: do not rewind the push buffer under it, just
+             * carry on appending and try again next frame. */
+            xb_swap_gave_up("the GPU to go idle");
+            return;
+        }
     }
     if (ok) {
         while (pb_finished()) {   /* 1 = buffer table full, try again */

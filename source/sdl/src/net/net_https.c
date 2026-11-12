@@ -10,6 +10,9 @@
 #include <string.h>
 #include <errno.h>
 #include <time.h>
+#ifdef SONICR_XBOX
+#include <SDL.h>   /* the lobby keep-alive runs on its own thread: one request at a time */
+#endif
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -501,15 +504,38 @@ void net_https_shutdown(void)
 #endif
 }
 
+#ifdef SONICR_XBOX
+/* do_request shares one TLS I/O buffer, so two threads must not overlap. The
+ * mutex is made by the first call, which comes from the main thread. */
+static SDL_mutex *s_httpMtx;
+static long locked_request(const char *method, const char *url, const char *token,
+                           const char *body, HttpsResponse *resp)
+{
+    if (!s_httpMtx) s_httpMtx = SDL_CreateMutex();
+    if (s_httpMtx) SDL_LockMutex(s_httpMtx);
+    long st = do_request(method, url, token, body, resp);
+    if (s_httpMtx) SDL_UnlockMutex(s_httpMtx);
+    return st;
+}
+#endif
+
 long net_https_get(const char *url, const char *token, HttpsResponse *resp)
 {
+#ifdef SONICR_XBOX
+    return locked_request("GET", url, token, NULL, resp);
+#else
     return do_request("GET", url, token, NULL, resp);
+#endif
 }
 
 long net_https_post(const char *url, const char *token,
                     const char *body, HttpsResponse *resp)
 {
+#ifdef SONICR_XBOX
+    return locked_request("POST", url, token, body, resp);
+#else
     return do_request("POST", url, token, body, resp);
+#endif
 }
 
 #else /* !SONICR_MATCHMAKER */

@@ -42,7 +42,9 @@ static int xb_pad_back(void)
     }
     return 0;
 }
-#define LOBBY_BACK()    (xbox_kbd_present() ? xb_pad_back() : ((g_inputBits & 1) != 0))
+/* Back is the pad's B button only: X is the lobby's Join / track key, and
+ * g_inputBits bit 0 (accelerate) is B *or* X by default. */
+#define LOBBY_BACK()    ((platform_menu_buttons() & MENUBTN_B) != 0)
 #else
 #define XB_PAD_ITEM_OFS 3
 #define XB_CANCEL_PRESSED() (g_diKeyboardState[0x01] != 0)
@@ -4868,7 +4870,7 @@ static int s_pickerPrevState = -1;
 #ifdef SONICR_XBOX
 #define NETTXT_LAN_PROMPT   "PRESS Y FOR LAN PLAY"
 #define NETTXT_HOST         "PRESS A TO HOST"
-#define NETTXT_JOIN         "PRESS RT TO JOIN"
+#define NETTXT_JOIN         "PRESS X TO JOIN"
 #define NETTXT_PICKER_HINT  "UP/DOWN SELECT - A JOIN - Y LAN - B BACK"
 #define NETTXT_LANHOST      "PRESS Y TO HOST LAN ONLY"
 #else
@@ -5153,16 +5155,54 @@ static void NetSynthPadKeys(void)
     unsigned int mb = platform_menu_buttons();
     unsigned int edge = mb & ~s_netPadPrev;   /* buttons newly pressed this frame */
     s_netPadPrev = mb;
+#ifdef SONICR_XBOX
+    /* Xbox layout. Host / join menu (states 0, 1, 3): A host, X join, Y LAN.
+     * In the lobby (state 2): A character, X track, Y mode (Grand Prix /
+     * Balloons), Start = GO (host starts the race). */
+    if (edge & MENUBTN_START)                   g_diKeyboardState[0x3B] = 1; /* F1: GO */
+    if (ns_lobbyState == 2) {
+        if (edge & MENUBTN_A)                   g_diKeyboardState[0x40] = 1; /* F6: character */
+        if (edge & MENUBTN_X)                   g_diKeyboardState[0x42] = 1; /* F8: track */
+        if (edge & MENUBTN_Y)                   g_diKeyboardState[0x41] = 1; /* F7: mode */
+    } else {
+        if (edge & MENUBTN_A)                   g_diKeyboardState[0x3B] = 1; /* F1: host */
+        if (edge & MENUBTN_X)                   g_diKeyboardState[0x3C] = 1; /* F2: join */
+        if (edge & MENUBTN_Y)                   g_diKeyboardState[0x3D] = 1; /* F3: LAN */
+    }
+#else
     if (edge & (MENUBTN_A | MENUBTN_START))    g_diKeyboardState[0x3B] = 1; /* F1 */
     if (edge & MENUBTN_R)                       g_diKeyboardState[0x3C] = 1; /* F2 */
     if (edge & MENUBTN_Y)                       g_diKeyboardState[0x3D] = 1; /* F3 */
     if (edge & (MENUBTN_LEFT | MENUBTN_RIGHT))  g_diKeyboardState[0x40] = 1; /* F6 */
     if (edge & (MENUBTN_UP | MENUBTN_DOWN))     g_diKeyboardState[0x42] = 1; /* F8 */
     if (edge & MENUBTN_L)                        g_diKeyboardState[0x41] = 1; /* F7 */
+#endif
 }
 #else
 static void NetSynthPadReset(void) { }
 static void NetSynthPadKeys(void) { }
+#endif
+
+#ifdef SONICR_XBOX
+#include <SDL.h>
+static volatile int s_kaBusy;
+static int s_kaPlayers;
+static int xb_keepalive_thread(void *unused)
+{
+    (void)unused;
+    MatchmakerKeepAlive(s_kaPlayers, "LOBBY");
+    s_kaBusy = 0;
+    return 0;
+}
+static void xb_matchmaker_keepalive_async(int players)
+{
+    if (s_kaBusy) return;               /* the last ping is still on its way */
+    s_kaBusy = 1;
+    s_kaPlayers = players;
+    SDL_Thread *t = SDL_CreateThreadWithStackSize(xb_keepalive_thread, "keepalive", 128 * 1024, NULL);
+    if (t) SDL_DetachThread(t);
+    else   s_kaBusy = 0;
+}
 #endif
 
 static int s_lanOnlyHost;   /* set by F3/Y in state 0: host without matchmaker */
@@ -5253,7 +5293,7 @@ int NetworkScreen(void)
 
                     if (g_fadeState == 0) {
                         /* Back button */
-                        if (g_inputBits & 1) {
+                        if (LOBBY_BACK()) {
                             PlaySoundEffect(0, 0, 0);
                             g_screenResult = 0;
                             g_fadeState = FADE_OUT;
@@ -6072,9 +6112,14 @@ skip_text_entry:
                 UpdateNetworkSync(g_netGameInfoDest, 0x30);   /* 0x48B687 */
             }
             if ((g_totalFrames % 900) == 0 && MatchmakerGetSessionId() >= 0) {
+#ifdef SONICR_XBOX
+                /* The HTTPS ping takes ~1 s: on its own thread, so the lobby does not stall. */
+                xb_matchmaker_keepalive_async(g_netPlayerCount);
+#else
                 int kaStatus = MatchmakerKeepAlive(g_netPlayerCount, "LOBBY");
                 NetDbgPush("KEEPALIVE HTTP %d SID %lld",
                            kaStatus, (long long)MatchmakerGetSessionId());
+#endif
             }
         }
 

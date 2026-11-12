@@ -36,6 +36,8 @@ GLYPH_H = 9
 
 def glyph_mask(ch):
     """Return (w, rows) with rows[y][x] = True where the glyph has ink."""
+    if ch == ' ':
+        return 4, [[False] * 4 for _ in range(GLYPH_H)]
     if ch == '<':
         x0, w, y0 = 48, 5, 188
     elif ch == '>':
@@ -93,8 +95,8 @@ def erase_with_column(x0, y0, x1, y1, col):
 
 # ---- blue F-key capsules: 40x16 each, F1..F6 at y=28, F7..F12 at y=44 ----
 CAPS = {
-    'F1': (0, 28, 'A'), 'F2': (40, 28, 'RT'), 'F3': (80, 28, 'Y'),
-    'F6': (200, 28, '<>'), 'F7': (0, 44, 'LT'), 'F8': (40, 44, '^v'),
+    'F1': (0, 28, 'A'), 'F2': (40, 28, 'X'), 'F3': (80, 28, 'Y'),
+    'F6': (200, 28, 'A'), 'F7': (0, 44, 'Y'), 'F8': (40, 44, 'X'),
 }
 for name, (cx, cy, label) in CAPS.items():
     erase_with_column(cx + 9, cy + 2, cx + 29, cy + 15, cx + 8)
@@ -121,9 +123,7 @@ def prefix_box(bx, by, bw=128, bh=16):
 
 BARS = [  # (bar x, bar y, new prefix)
     (128, 76, 'A'),    # F1 CREATE GAME
-    (128, 92, 'RT'),   # F2 JOIN GAME
-    (128, 108, 'A'),   # F1 GO!
-    (0, 0, 'B'),       # Esc BACK
+    (128, 92, 'X'),    # F2 JOIN GAME
 ]
 yellow = (255, 236, 130)
 for bx, by, label in BARS:
@@ -131,6 +131,24 @@ for bx, by, label in BARS:
     erase_with_column(x0 - 1, by + 2, x1 + 3, by + 14, x0 - 2)
     tw = text_width(label)
     draw_text(label, x1 + 1 - tw, by + 3, color=yellow)
+
+# ---- whole-bar sentences: "PRESS START TO GO" and "PRESS B TO EXIT" ------
+RED = (235, 25, 15)
+def sentence_bar(bx, by, parts):
+    """Clear the bar's text area and write parts [(text, colour)] from its left."""
+    erase_with_column(bx + 5, by + 2, bx + 112, by + 14, bx + 4)
+    full = ''.join(t for t, _ in parts)
+    tw = text_width(full)
+    tw += 5 * (len(parts) - 1)
+    assert tw <= 104, (full, tw)
+    x = bx + 7
+    for text, col in parts:
+        draw_text(text, x, by + 3, color=col)
+        x += text_width(text) + 1 + 4 + 1   # (+ a space)
+    return tw
+
+sentence_bar(128, 108, [('PRESS START TO', yellow), ('GO', RED)])
+sentence_bar(0, 0, [('PRESS B TO', yellow), ('EXIT', RED)])
 
 # ---- small "Esc..." hint near the bottom right -> "B..." ----------------
 # "Esc" covers x 220..243, y 219..231 (the dots follow from x 244).

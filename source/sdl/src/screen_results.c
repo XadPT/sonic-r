@@ -162,6 +162,17 @@ void RenderResultsScreen(int screenMode, int playerOffset)
               | ((unsigned int)v << 8)
               | (unsigned int)v;
 
+#ifdef SONICR_XBOX
+    /* "Esc..." becomes the atlas's top-left bar, repainted by
+     * tools/make_net00_patch.py as "PRESS B TO EXIT" (128x16, drawn 1.5x). */
+    DrawTexturedQuad(6 + safeX, 6 + safeY,
+        0x43FA0000,
+        0xC0, 0x18,                  /* width=192, height=24 */
+        tpage,
+        0, 0,                        /* uvX=0, uvY=0 */
+        0x80, 0x10,                  /* uvW=128, uvH=16 */
+        animColor);
+#else
     DrawTexturedQuad(6 + safeX, 6 + safeY,  /* EAX=6, EDX=6 */
         0x43FA0000,                  /* depth = 500.0f */
         0x48, 0x1a,                  /* width=72, height=26 */
@@ -169,6 +180,7 @@ void RenderResultsScreen(int screenMode, int playerOffset)
         0xdc, 0xdb,                  /* uvX=220, uvY=219 */
         0x24, 0xd,                   /* uvW=36, uvH=13 */
         animColor);
+#endif
 
     /* Character banner — 0x48a1b7-0x48a1e6 */
     DrawTexturedQuad(0xe2, 0x20,     /* EAX=226, EDX=32 */

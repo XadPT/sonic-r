@@ -113,10 +113,12 @@ version on every machine).
 - **Sign-in (online list):** the first time, the network screen shows a code
   and a QR code: open the address on a phone or PC and sign in. The token is
   saved with the settings. LAN play needs no sign-in.
-- **Buttons on the network screens:** A / Start host (or start the race), right
-  trigger join, Y LAN-only host / LAN search, left trigger change mode, D-pad
-  left/right character, D-pad up/down track, B back. The on-screen hints show
-  these Xbox buttons.
+- **Buttons on the network screens:** host / join menu: A host, X join, Y LAN
+  (LAN-only host / LAN search), B back. In the lobby: A change character,
+  X change track, Y change mode (Grand Prix / Balloons), Start = GO (the host
+  starts the race), B exit. In the online session list the D-pad selects and A
+  or Start joins. The on-screen hints show these buttons ("PRESS B TO EXIT",
+  "PRESS START TO GO", ...).
 - **Starting:** the host presses A; a 5-second "RACE STARTS IN N" countdown runs
   on every machine. A machine that has not finished loading after 30 s is left
   out instead of holding everyone on a black screen.

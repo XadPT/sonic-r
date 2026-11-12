@@ -402,6 +402,7 @@ static void xb_ac97_shutdown(void)
         pw[bdOff[i] >> 2] = 0;                    /* forget the descriptor list */
     }
     fprintf(stderr, "exit: audio hardware idle\n");
+    fflush(stderr);   /* (so the log shows whether this point was reached) */
 }
 
 /* The game leaves through exit(0) (shutdown.c, SDL_QUIT), which never returns
@@ -412,6 +413,10 @@ static void xb_exit_cleanup(void)
 {
     fprintf(stderr, "exit: idling audio, full reboot\n");
     fflush(stderr);
+    /* Same order as the normal exit below: stop SDL's audio callback first, so
+     * nothing is still feeding the AC97 when it is shut down (the in-game
+     * reset exits from the middle of a frame, with the mixer running). */
+    SDL_QuitSubSystem(SDL_INIT_AUDIO);
     xb_ac97_shutdown();
     SDL_Delay(200);
     XReboot();   /* HalRebootRoutine: full SMC reset */

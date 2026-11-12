@@ -426,9 +426,8 @@ int MatchmakerKeepAlive(int player_count, const char *status)
     HttpsResponse resp;
     long st = net_https_post(url, s_authToken, body, &resp);
     DebugLog("MatchmakerKeepAlive: HTTP %ld body=%.200s\n", st, resp.data);
-    DebugLog("curl -v -X POST -H \"Content-Type: application/json\" "
-             "-H \"X-Reality-Jump-Token: %s\" "
-             "-d '%s' \"%s\"\n", s_authToken, body, url);
+    /* (the auth token is never written to the log) */
+    DebugLog("MatchmakerKeepAlive: POST %s %s\n", url, body);
     return (int)st;
 }
 

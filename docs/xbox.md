@@ -94,7 +94,7 @@ Up to four pads are supported for split-screen.
 - *Draw Distance:* Far is the PC maximum; Very Far reaches beyond it.
 
 **Exit to Dashboard** is an entry in the options menu. **In-game reset:** hold
-L + R triggers + Back + Black for half a second, anywhere.
+L + R triggers + Back + Black, anywhere (it acts at once).
 
 **Saves and progress** are written automatically: the last Load/Save slot you
 used is loaded at start-up, and progress is saved to it after every race.

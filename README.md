@@ -110,7 +110,7 @@ Full details are in [docs/xbox.md](docs/xbox.md#building-from-source).
 
 - **Options > Controls** remaps the buttons. **Options > Graphics** sets
   resolution and draw distance.
-- **Reset to dashboard:** hold L + R triggers + Back + Black for half a second.
+- **Reset to dashboard:** hold L + R triggers + Back + Black (acts at once).
 - **Music:** `MUSIC\trackN.son` (raw PCM) or `MUSIC\trackN.adx` (about 3.5x smaller).
 - **Diagnostics:** off by default. Put an empty `DEBUG.TXT` next to
   `default.xbe` to enable `SONICR.LOG` and the debug pad shortcuts when

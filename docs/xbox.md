@@ -233,10 +233,16 @@ at some geometry joins are part of the original game.
   trademarks of SEGA. This project contains no game assets.
 - **[ghurone](https://github.com/ghurone/Sonic-R-PSP)**: the PSP port of the same decompilation. Its 60 fps
   interpolation method and several fixes (Radiant Emerald start sign, course menu,
-  file handle leak) were studied and reimplemented here, and its README layout
-  inspired this project's page.
+  file handle leak) were studied and reimplemented here, its buffered file reading
+  (a read buffer on every game file, the files opened as few times as possible)
+  inspired the Xbox read-ahead cache, and its README layout inspired this
+  project's page.
 - **[jnmartin84](https://github.com/jnmartin84)**: the Sonic R decompilation and
   cross-platform engine (desktop, Dreamcast, online mode) this port is built on.
+  Later upstream fixes were merged with jnmartin84's authorship kept: the options
+  and load/save screens running at ~20 fps, the jet flame animation, online
+  balloon mode and the network interpolation reset. The bulk texture loaders
+  the Xbox now uses are the Dreamcast code path.
 - **Xbox port:** all code of the Xbox port was written by **Claude** (Anthropic's
   AI model, through Claude Code).
 - **XadPT:** did not write any code. XadPT gave Claude all the instructions and

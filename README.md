@@ -11,9 +11,11 @@ toolchain. Tested on real hardware (component video, 480p and 720p).
 ## Credits and authorship
 
 - **Original game:** Traveller's Tales and Sonic Team, published by SEGA.
-- **Decompilation and cross-platform engine:** [jnmartin84](https://github.com/jnmartin84/sonic-r).
+- **Decompilation and cross-platform engine:** [jnmartin84](https://github.com/jnmartin84/sonic-r),
+  including the later upstream fixes merged here (30 fps options screens, jet flame,
+  online balloon mode, network interpolation) and the Dreamcast bulk texture loaders.
 - **PSP port:** [ghurone](https://github.com/ghurone/Sonic-R-PSP). Its 60 fps method and
-  several fixes were studied and reimplemented for the Xbox.
+  several fixes and its buffered file reading were studied and reimplemented for the Xbox.
 - **Xbox port:** all of the code was written by **Claude** (Anthropic's AI, through Claude Code).
 - **XadPT** did not program anything. XadPT gave Claude every instruction and
   direction for the port and tested everything that could be tested on a real

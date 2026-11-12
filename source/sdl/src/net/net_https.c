@@ -251,6 +251,18 @@ static sock_t tcp_connect(const char *host, const char *port)
     for (rp = res; rp; rp = rp->ai_next) {
         s = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
         if (s == SOCK_INVALID) continue;
+        {   /* A matchmaker that does not answer must not hang the game: reads and
+             * writes give up after 8 s (the NTP query above does the same, 2 s). */
+#ifdef _WIN32
+            DWORD tmo = 8000;
+#else
+            struct timeval tmo;
+            tmo.tv_sec = 8;
+            tmo.tv_usec = 0;
+#endif
+            setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tmo, sizeof(tmo));
+            setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tmo, sizeof(tmo));
+        }
         if (connect(s, rp->ai_addr, (int)rp->ai_addrlen) == 0) break;
         SOCK_CLOSE(s);
         s = SOCK_INVALID;
